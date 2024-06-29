@@ -5,7 +5,7 @@ authors = ["Yury Delendik <ydelendik@mozilla.com>"]
 
 [dependencies]
 vlq = "0.5.1"
-wasmparser = "0.15.2"
+wasmparser = "0.212.0"
 gimli = "0.15.0"
 rustc-serialize = "0.3.24"
 getopts = "0.2.17"

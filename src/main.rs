@@ -4,10 +4,11 @@ use std::io::prelude::*;
 
 use dwarf::get_debug_loc;
 use getopts::Options;
+use map_source::{map_source, SourceMapEntry};
 use reloc::reloc;
-use to_json::convert_debug_info_to_json;
-use wasm_read::{add_source_mapping_url_section, remove_debug_sections, DebugSections};
 
+use wasm_read::{add_source_mapping_url_section, remove_debug_sections, DebugSections};
+use wasmparser::Operator;
 extern crate getopts;
 extern crate gimli;
 extern crate rustc_serialize;
@@ -15,8 +16,8 @@ extern crate vlq;
 extern crate wasmparser;
 
 mod dwarf;
+mod map_source;
 mod reloc;
-mod to_json;
 mod wasm_read;
 
 struct PrefixReplacements {
@@ -66,14 +67,7 @@ fn main() {
     let mut opts = Options::new();
     opts.optopt("o", "", "set output file name", "NAME");
     opts.optflag("", "relocation", "perform relocation first");
-    opts.optflag("d", "dump", "print source files and location entries");
-    opts.optmulti(
-        "p",
-        "prefix",
-        "replace source filename prefix",
-        "OLD_PREFIX[=NEW_PREFIX]",
-    );
-    opts.optflag("s", "sources", "read and embed source files");
+
     opts.optopt("w", "", "set output wasm file", "NAME");
     opts.optflag("x", "strip", "removes debug and linking sections");
     opts.optopt(
@@ -90,9 +84,7 @@ fn main() {
         Ok(m) => m,
         Err(f) => panic!(f.to_string()),
     };
-    if matches.opt_present("h") || matches.free.len() < 1
-        || !(matches.opt_present("o") || matches.opt_present("d"))
-    {
+    if matches.opt_present("h") || matches.free.len() < 1 || !(matches.opt_present("o")) {
         return print_usage(&program, opts);
     }
 
@@ -113,43 +105,29 @@ fn main() {
 
     let as_json = matches.opt_present("o");
     let mut di = get_debug_loc(&debug_sections);
+    let source_map = map_source(data.as_slice(), &di);
 
-    if matches.opt_present("sources") {
-        let mut sources = Vec::new();
-        for file in di.sources.iter() {
-            let mut f = File::open(file).expect("file not found");
-            let mut data = Vec::new();
-            f.read_to_end(&mut data).expect("unable to read file");
-            sources.push(String::from_utf8(data).unwrap());
-        }
-        di.sources_content = Some(sources);
+    let output = matches.opt_str("o").unwrap();
+    let mut result = String::new();
+    for (id, path) in di.sources.iter().enumerate() {
+        result += &format!("source {} {}\n", id, path);
     }
+    for (_, entry) in source_map.iter().enumerate() {
+        let SourceMapEntry {
+            address,
+            op,
+            source_file,
+            line,
+            source_code,
+        } = entry;
 
-    if matches.opt_present("prefix") {
-        let prefix_replacements = PrefixReplacements::parse(&matches.opt_strs("prefix"));
-        prefix_replacements.replace_all(&mut di.sources);
+        result += &format!(
+            "{}@{} {}({}:{})\n",
+            op, address, source_code, source_file, line
+        )
     }
-
-    if as_json {
-        let output = matches.opt_str("o").unwrap();
-        let result = convert_debug_info_to_json(&di).to_string();
-        if output == "-" {
-            println!("{}", result);
-        } else {
-            let mut f_out = File::create(output).expect("file cannot be created");
-            f_out.write(result.as_bytes()).expect("data written");
-        }
-    } else {
-        for (id, path) in di.sources.iter().enumerate() {
-            println!("source {}: {}", id, path);
-        }
-        for loc in di.locations {
-            println!(
-                "{:x} @ {},{} ({})",
-                loc.address, loc.line, loc.column, loc.source_id
-            );
-        }
-    }
+    let mut f_out = File::create(output).expect("file cannot be created");
+    f_out.write(result.as_bytes()).expect("data written");
 
     if matches.opt_present("w") {
         let wasm_output = matches.opt_str("w").unwrap();

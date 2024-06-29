@@ -3,23 +3,22 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use wasmparser::{ImportSectionEntryType, Operator, Parser, ParserInput, ParserState, SectionCode,
-                 WasmDecoder};
+use wasmparser::{Operator, Parser, Payload::*};
 
-fn is_reloc_debug_section_name(name: &[u8]) -> bool {
-    return name.len() >= 13 && &name[0..13] == b"reloc..debug_";
+fn is_reloc_debug_section_name(name: &str) -> bool {
+    return name == "reloc..debug_";
 }
 
-fn is_debug_section_name(name: &[u8]) -> bool {
-    return name.len() >= 7 && &name[0..7] == b".debug_";
+fn is_debug_section_name(name: &str) -> bool {
+    return name == ".debug_";
 }
 
-fn is_linking_section_name(name: &[u8]) -> bool {
-    return name == b"linking";
+fn is_linking_section_name(name: &str) -> bool {
+    return name == "linking";
 }
 
-fn is_source_mapping_section_name(name: &[u8]) -> bool {
-    return name == b"sourceMappingURL";
+fn is_source_mapping_section_name(name: &str) -> bool {
+    return name == "sourceMappingURL";
 }
 
 pub struct DebugSections {
@@ -34,7 +33,7 @@ pub struct DebugSections {
 
 impl DebugSections {
     pub fn read_sections(wasm: &[u8]) -> DebugSections {
-        let mut parser = Parser::new(wasm);
+        let mut parser = Parser::new(0);
         let mut input = ParserInput::Default;
         let mut current_section_name = None;
         let mut linking: Option<Vec<u8>> = None;
@@ -46,7 +45,24 @@ impl DebugSections {
         let mut data_segment_offsets = Vec::new();
         let mut section_index = 0;
         let mut data_copy = None;
+        for payload in parser.parse_all(wasm) {
+            let payload = payload.unwrap();
+            match payload {
+                CustomSection(reader) => {
+                    let name = reader.name();
 
+                    if is_debug_section_name(&name)
+                        || is_reloc_debug_section_name(&name)
+                        || is_linking_section_name(&name)
+                        || is_source_mapping_section_name(&name)
+                    {
+                        current_section_name = Some(name);
+                        data_copy = Some(data);
+                        input = ParserInput::ReadSectionRawData;
+                    }
+                }
+            }
+        }
         loop {
             let offset = parser.current_position();
             if let ParserInput::SkipFunctionBody = input {
@@ -61,7 +77,8 @@ impl DebugSections {
                 ParserState::BeginSection {
                     code: SectionCode::Custom { ref name, .. },
                     ..
-                } if is_debug_section_name(name) || is_reloc_debug_section_name(name)
+                } if is_debug_section_name(name)
+                    || is_reloc_debug_section_name(name)
                     || is_linking_section_name(name)
                     || is_source_mapping_section_name(name) =>
                 {
@@ -165,7 +182,8 @@ pub fn remove_debug_sections(wasm: &[u8], write: &mut Write) {
             ParserState::BeginSection {
                 code: SectionCode::Custom { ref name, .. },
                 ..
-            } if is_debug_section_name(name) || is_reloc_debug_section_name(name)
+            } if is_debug_section_name(name)
+                || is_reloc_debug_section_name(name)
                 || is_linking_section_name(name) =>
             {
                 if !skipping_section {

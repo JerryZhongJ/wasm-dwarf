@@ -1,6 +1,8 @@
 // Parses DWARF information.
-
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::{self, BufReader};
 
 use gimli;
 
@@ -8,11 +10,7 @@ use gimli::{DebugAbbrev, DebugInfo, DebugLine, DebugStr, LittleEndian};
 
 trait Reader: gimli::Reader<Offset = usize> {}
 
-impl<'input, Endian> Reader for gimli::EndianBuf<'input, Endian>
-where
-    Endian: gimli::Endianity,
-{
-}
+impl<'input, Endian> Reader for gimli::EndianBuf<'input, Endian> where Endian: gimli::Endianity {}
 
 use wasm_read::DebugSections;
 
@@ -32,7 +30,7 @@ pub struct DebugLoc {
 pub struct DebugLocInfo {
     pub sources: Vec<String>,
     pub locations: Vec<DebugLoc>,
-    pub sources_content: Option<Vec<String>>,
+    pub sources_content: Vec<Vec<String>>,
 }
 
 pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
@@ -56,10 +54,12 @@ pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
             Some(gimli::AttributeValue::DebugLineRef(offset)) => offset,
             _ => continue,
         };
-        let comp_dir = root.attr(gimli::DW_AT_comp_dir)
+        let comp_dir = root
+            .attr(gimli::DW_AT_comp_dir)
             .unwrap()
             .and_then(|attr| attr.string_value(debug_str));
-        let comp_name = root.attr(gimli::DW_AT_name)
+        let comp_name = root
+            .attr(gimli::DW_AT_name)
             .unwrap()
             .and_then(|attr| attr.string_value(debug_str));
         let program = debug_line.program(offset, unit.address_size(), comp_dir, comp_name);
@@ -68,6 +68,7 @@ pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
             let mut rows = program.rows();
             while let Some((header, row)) = rows.next_row().unwrap() {
                 let pc = debug_sections.code_content as u64 + row.address();
+                // let pc = row.address();
                 let line = row.line().unwrap_or(0);
                 let column = match row.column() {
                     gimli::ColumnType::Column(column) => column,
@@ -105,9 +106,13 @@ pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
                 if row.end_sequence() {
                     // Heuristic to remove dead functions.
                     let block_end_loc = locations.len() - 1;
-                    let fn_size = locations[block_end_loc].address - locations[block_start_loc].address + 1;
-                    let fn_size_field_len = ((fn_size + 1).next_power_of_two().trailing_zeros() + 6) / 7;
-                    if locations[block_start_loc].address <= debug_sections.code_content as u64 + fn_size_field_len as u64 {
+                    let fn_size =
+                        locations[block_end_loc].address - locations[block_start_loc].address + 1;
+                    let fn_size_field_len =
+                        ((fn_size + 1).next_power_of_two().trailing_zeros() + 6) / 7;
+                    if locations[block_start_loc].address
+                        <= debug_sections.code_content as u64 + fn_size_field_len as u64
+                    {
                         locations.drain(block_start_loc..);
                     }
                     block_start_loc = locations.len();
@@ -120,10 +125,16 @@ pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
     }
 
     locations.sort_by(|a, b| a.address.cmp(&b.address));
+    let mut sources_content = Vec::new();
+    for file in sources.iter() {
+        let f = File::open(file).expect("file not found");
+        let f = BufReader::new(f);
+        sources_content.push(f.lines().filter_map(|line| line.ok()).collect());
+    }
 
     DebugLocInfo {
         sources,
         locations,
-        sources_content: None,
+        sources_content,
     }
 }
