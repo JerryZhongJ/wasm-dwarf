@@ -7,8 +7,8 @@ use getopts::Options;
 use map_source::{map_source, SourceMapEntry};
 use reloc::reloc;
 
-use wasm_read::{add_source_mapping_url_section, remove_debug_sections, DebugSections};
-use wasmparser::Operator;
+use wasm_read::{add_source_mapping_url_section, DebugSections};
+
 extern crate getopts;
 extern crate gimli;
 extern crate rustc_serialize;
@@ -68,8 +68,6 @@ fn main() {
     opts.optopt("o", "", "set output file name", "NAME");
     opts.optflag("", "relocation", "perform relocation first");
 
-    opts.optopt("w", "", "set output wasm file", "NAME");
-    opts.optflag("x", "strip", "removes debug and linking sections");
     opts.optopt(
         "m",
         "source-map",
@@ -112,7 +110,7 @@ fn main() {
     for (id, path) in di.sources.iter().enumerate() {
         result += &format!("source {} {}\n", id, path);
     }
-    for (_, entry) in source_map.iter().enumerate() {
+    for entry in source_map.iter() {
         let SourceMapEntry {
             address,
             op,
@@ -122,33 +120,12 @@ fn main() {
         } = entry;
 
         result += &format!(
-            "{}@{} {}({}:{})\n",
+            "{}@{}\t\t{}({}:{})\n",
             op, address, source_code, source_file, line
         )
     }
     let mut f_out = File::create(output).expect("file cannot be created");
     f_out.write(result.as_bytes()).expect("data written");
-
-    if matches.opt_present("w") {
-        let wasm_output = matches.opt_str("w").unwrap();
-        let mut modified_wasm = None;
-        if matches.opt_present("x") {
-            modified_wasm = Some(Vec::new());
-            remove_debug_sections(&data, modified_wasm.as_mut().unwrap());
-        }
-        if matches.opt_present("m") {
-            if modified_wasm.is_none() {
-                modified_wasm = Some(Vec::new());
-                modified_wasm.as_mut().unwrap().extend_from_slice(&data);
-            }
-            let url = matches.opt_str("m").unwrap();
-            add_source_mapping_url_section(&url, modified_wasm.as_mut().unwrap());
-        }
-        let mut f_out = File::create(wasm_output).expect("file cannot be created");
-        f_out
-            .write(&modified_wasm.unwrap_or(data))
-            .expect("wasm data written");
-    }
 }
 
 fn print_usage(program: &str, opts: Options) {

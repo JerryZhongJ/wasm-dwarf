@@ -39,10 +39,10 @@ pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
     let mut source_to_id_map: HashMap<u64, usize> = HashMap::new();
 
     let ref tables = debug_sections.tables;
-    let ref debug_str = DebugStr::new(&tables[&to_vec(b".debug_str")], LittleEndian);
-    let ref debug_abbrev = DebugAbbrev::new(&tables[&to_vec(b".debug_abbrev")], LittleEndian);
-    let ref debug_info = DebugInfo::new(&tables[&to_vec(b".debug_info")], LittleEndian);
-    let ref debug_line = DebugLine::new(&tables[&to_vec(b".debug_line")], LittleEndian);
+    let ref debug_str = DebugStr::new(&tables[".debug_str"], LittleEndian);
+    let ref debug_abbrev = DebugAbbrev::new(&tables[".debug_abbrev"], LittleEndian);
+    let ref debug_info = DebugInfo::new(&tables[".debug_info"], LittleEndian);
+    let ref debug_line = DebugLine::new(&tables[".debug_line"], LittleEndian);
 
     let mut iter = debug_info.units();
     while let Some(unit) = iter.next().unwrap_or(None) {
@@ -67,7 +67,7 @@ pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
         if let Ok(program) = program {
             let mut rows = program.rows();
             while let Some((header, row)) = rows.next_row().unwrap() {
-                let pc = debug_sections.code_content as u64 + row.address();
+                let pc = debug_sections.code_start as u64 + row.address();
                 // let pc = row.address();
                 let line = row.line().unwrap_or(0);
                 let column = match row.column() {
@@ -111,7 +111,7 @@ pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
                     let fn_size_field_len =
                         ((fn_size + 1).next_power_of_two().trailing_zeros() + 6) / 7;
                     if locations[block_start_loc].address
-                        <= debug_sections.code_content as u64 + fn_size_field_len as u64
+                        <= debug_sections.code_start as u64 + fn_size_field_len as u64
                     {
                         locations.drain(block_start_loc..);
                     }

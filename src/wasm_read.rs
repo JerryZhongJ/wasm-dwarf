@@ -3,14 +3,14 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use wasmparser::{Operator, Parser, Payload::*};
+use wasmparser::{Data, DataKind, Operator, Parser, Payload::*};
 
 fn is_reloc_debug_section_name(name: &str) -> bool {
-    return name == "reloc..debug_";
+    return name.starts_with("reloc..debug_");
 }
 
 fn is_debug_section_name(name: &str) -> bool {
-    return name == ".debug_";
+    return name.starts_with(".debug_");
 }
 
 fn is_linking_section_name(name: &str) -> bool {
@@ -21,198 +21,78 @@ fn is_source_mapping_section_name(name: &str) -> bool {
     return name == "sourceMappingURL";
 }
 
-pub struct DebugSections {
-    pub tables: HashMap<Vec<u8>, Vec<u8>>,
-    pub tables_index: HashMap<usize, Vec<u8>>,
-    pub reloc_tables: HashMap<Vec<u8>, Vec<u8>>,
+pub struct DebugSections<'a> {
+    pub tables: HashMap<&'a str, Vec<u8>>,
+    // pub tables_index: HashMap<usize, Vec<u8>>,
+    pub reloc_tables: HashMap<&'a str, Vec<u8>>,
     pub linking: Option<Vec<u8>>,
-    pub code_content: usize,
+    pub code_start: usize,
     pub func_offsets: Vec<usize>,
     pub data_segment_offsets: Vec<u32>,
 }
 
-impl DebugSections {
-    pub fn read_sections(wasm: &[u8]) -> DebugSections {
-        let mut parser = Parser::new(0);
-        let mut input = ParserInput::Default;
-        let mut current_section_name = None;
+impl<'a> DebugSections<'a> {
+    pub fn read_sections(wasm: &'a [u8]) -> DebugSections<'a> {
+        let parser = Parser::new(0);
         let mut linking: Option<Vec<u8>> = None;
         let mut tables = HashMap::new();
-        let mut tables_index = HashMap::new();
+        // let mut tables_index = HashMap::new();
         let mut reloc_tables = HashMap::new();
-        let mut code_content: Option<usize> = None;
+        let mut code_start: usize = 0;
         let mut func_offsets = Vec::new();
         let mut data_segment_offsets = Vec::new();
-        let mut section_index = 0;
-        let mut data_copy = None;
+        // let mut section_index = 0;
         for payload in parser.parse_all(wasm) {
             let payload = payload.unwrap();
             match payload {
                 CustomSection(reader) => {
                     let name = reader.name();
-
-                    if is_debug_section_name(&name)
-                        || is_reloc_debug_section_name(&name)
-                        || is_linking_section_name(&name)
-                        || is_source_mapping_section_name(&name)
-                    {
-                        current_section_name = Some(name);
-                        data_copy = Some(data);
-                        input = ParserInput::ReadSectionRawData;
+                    let data = reader.data();
+                    if is_debug_section_name(&name) {
+                        tables.insert(name, data.to_vec());
+                    } else if is_reloc_debug_section_name(&name) {
+                        reloc_tables.insert(name, data.to_vec());
+                    } else if is_linking_section_name(&name) {
+                        linking = Some(data.to_vec());
+                    } else if is_source_mapping_section_name(&name) {
                     }
                 }
-            }
-        }
-        loop {
-            let offset = parser.current_position();
-            if let ParserInput::SkipFunctionBody = input {
-                // Saw function body start, saving as func_offset
-                func_offsets.push(offset - code_content.unwrap());
-            }
+                CodeSectionStart { count, range, size } => {
+                    code_start = range.start;
+                }
+                CodeSectionEntry(body) => {
+                    let reader = body.get_binary_reader();
 
-            let state = parser.read_with_input(input);
-            match *state {
-                ParserState::EndWasm => break,
-                ParserState::Error(err) => panic!("Error: {:?}", err),
-                ParserState::BeginSection {
-                    code: SectionCode::Custom { ref name, .. },
-                    ..
-                } if is_debug_section_name(name)
-                    || is_reloc_debug_section_name(name)
-                    || is_linking_section_name(name)
-                    || is_source_mapping_section_name(name) =>
-                {
-                    let mut name_copy = Vec::new();
-                    name_copy.extend_from_slice(name);
-                    current_section_name = Some(name_copy);
-                    data_copy = Some(Vec::new());
-                    input = ParserInput::ReadSectionRawData;
+                    func_offsets.push(reader.original_position() - code_start);
                 }
-                ParserState::SectionRawData(ref data) => {
-                    data_copy.as_mut().unwrap().extend_from_slice(data);
-                    input = ParserInput::Default;
-                }
-                ParserState::BeginSection {
-                    code: SectionCode::Import,
-                    ..
-                }
-                | ParserState::BeginSection {
-                    code: SectionCode::Data,
-                    ..
-                }
-                | ParserState::BeginSection {
-                    code: SectionCode::Code,
-                    ..
-                } => {
-                    input = ParserInput::Default;
-                }
-                ParserState::BeginFunctionBody { .. } => {
-                    if code_content.is_none() {
-                        code_content = Some(offset);
-                    }
-                    input = ParserInput::SkipFunctionBody;
-                }
-                ParserState::ImportSectionEntry {
-                    ty: ImportSectionEntryType::Function(..),
-                    ..
-                } => {
-                    func_offsets.push(0); // include imports?
-                    input = ParserInput::Default;
-                }
-                ParserState::BeginSection { .. } => {
-                    input = ParserInput::SkipSection;
-                }
-                ParserState::EndSection => {
-                    section_index += 1;
-
-                    if data_copy.is_some() {
-                        let mut name_copy = Vec::new();
-                        name_copy.extend_from_slice(current_section_name.as_ref().unwrap());
-                        tables_index.insert(section_index, name_copy);
-
-                        let section_name = current_section_name.take().unwrap();
-                        let data = data_copy.take().unwrap();
-                        if is_debug_section_name(&section_name) {
-                            tables.insert(section_name, data);
-                        } else if is_reloc_debug_section_name(&section_name) {
-                            reloc_tables.insert(section_name, data);
-                        } else {
-                            assert!(is_linking_section_name(&section_name));
-                            linking = Some(data);
+                ImportSection(reader) => func_offsets.push(0),
+                DataSection(reader) => {
+                    for data in reader.into_iter() {
+                        let Data { kind, .. } = data.unwrap();
+                        if let DataKind::Active { offset_expr, .. } = kind {
+                            let mut op_reader = offset_expr.get_operators_reader();
+                            let op = op_reader.read().unwrap();
+                            if let Operator::I32Const { value } = op {
+                                data_segment_offsets.push(value as u32);
+                            } else {
+                                panic!("Unexpected init expression operator");
+                            }
                         }
                     }
-                    input = ParserInput::Default;
                 }
-                ParserState::InitExpressionOperator(ref op) => {
-                    if let Operator::I32Const { value } = op {
-                        data_segment_offsets.push(*value as u32);
-                    } else {
-                        panic!("Unexpected init expression operator");
-                    }
-                    input = ParserInput::Default;
-                }
-                _ => {
-                    input = ParserInput::Default;
-                }
+                _ => {}
             }
         }
+
         DebugSections {
             tables,
-            tables_index,
+            // tables_index,
             reloc_tables,
             linking,
-            code_content: code_content.unwrap(),
+            code_start,
             func_offsets,
             data_segment_offsets,
         }
-    }
-}
-
-pub fn remove_debug_sections(wasm: &[u8], write: &mut Write) {
-    let mut parser = Parser::new(wasm);
-    let mut input = ParserInput::Default;
-    let mut last_written = 0;
-    let mut skipping_section = false;
-    loop {
-        let offset = parser.current_position();
-        let state = parser.read_with_input(input);
-        match *state {
-            ParserState::EndWasm => break,
-            ParserState::Error(err) => panic!("Error: {:?}", err),
-            ParserState::BeginSection {
-                code: SectionCode::Custom { ref name, .. },
-                ..
-            } if is_debug_section_name(name)
-                || is_reloc_debug_section_name(name)
-                || is_linking_section_name(name) =>
-            {
-                if !skipping_section {
-                    write
-                        .write(&wasm[last_written..offset])
-                        .expect("wasm result written");
-                    skipping_section = true;
-                }
-                input = ParserInput::ReadSectionRawData;
-            }
-            ParserState::BeginSection { .. } => {
-                skipping_section = false;
-                input = ParserInput::ReadSectionRawData;
-            }
-            ParserState::SectionRawData(..) => {
-                input = ParserInput::Default;
-            }
-            ParserState::EndSection => {
-                if skipping_section {
-                    last_written = offset;
-                }
-            }
-            _ => {}
-        }
-    }
-    if !skipping_section && last_written < wasm.len() {
-        write
-            .write(&wasm[last_written..wasm.len()])
-            .expect("wasm result written");
     }
 }
 

@@ -1,7 +1,7 @@
 // Applies reloction entries to the existing sections.
 use std::collections::HashMap;
 
-use wasmparser::BinaryReader;
+use wasmparser::{BinaryReader, WasmFeatures};
 
 use wasm_read::DebugSections;
 
@@ -19,18 +19,18 @@ enum SymbolKind {
 pub fn reloc(debug_sections: &mut DebugSections) {
     let (func_indices, symbols) = {
         let ref linking_table = debug_sections.linking.as_ref().unwrap();
-        let mut reader = BinaryReader::new(&linking_table);
+        let mut reader = BinaryReader::new(&linking_table, 0, WasmFeatures::all());
         let version = reader.read_var_u32().unwrap();
         assert!(version == 1);
         let mut symbols: HashMap<u32, SymbolKind> = HashMap::new();
         let mut func_indices: HashMap<u32, u32> = HashMap::new();
         while !reader.eof() {
             let table_code = reader.read_var_u32().unwrap();
-            let table = reader.read_string().unwrap();
+            let table = reader.read_string().unwrap().as_bytes();
             if table_code == 0x8
             /* WASM_SYMBOL_TABLE */
             {
-                let mut table_reader = BinaryReader::new(table);
+                let mut table_reader = BinaryReader::new(table, 0, WasmFeatures::all());
                 let table_len = table_reader.read_var_u32().unwrap();
                 for index in 0..table_len {
                     let symbol_kind = table_reader.read_var_u32().unwrap();
@@ -84,12 +84,12 @@ pub fn reloc(debug_sections: &mut DebugSections) {
     for ref reloc_table_name in reloc_tables_names {
         let reloc_table = debug_sections.reloc_tables[reloc_table_name].clone();
         let fixup_section_name = &reloc_table_name[6..];
-        let mut reader = BinaryReader::new(&reloc_table);
+        let mut reader = BinaryReader::new(&reloc_table, 0, WasmFeatures::all());
         reader.read_var_u32().unwrap(); // TODO use section_index
         let count = reader.read_var_u32().unwrap();
         for _ in 0..count {
             let ty = reader.read_var_u32().unwrap();
-            let mut table_entry = debug_sections.tables.get_mut(&to_vec(fixup_section_name));
+            let mut table_entry = debug_sections.tables.get_mut(fixup_section_name);
             let table: &mut Vec<u8> = table_entry.unwrap();
             let fixup_offset = reader.read_var_u32().unwrap() as usize;
 
