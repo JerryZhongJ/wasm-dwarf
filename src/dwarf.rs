@@ -30,7 +30,6 @@ pub struct DebugLoc {
 pub struct DebugLocInfo {
     pub sources: Vec<String>,
     pub locations: Vec<DebugLoc>,
-    pub sources_content: Vec<Vec<String>>,
 }
 
 pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
@@ -125,16 +124,6 @@ pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
     }
 
     locations.sort_by(|a, b| a.address.cmp(&b.address));
-    let mut sources_content = Vec::new();
-    for file in sources.iter() {
-        let f = File::open(file).expect("file not found");
-        let f = BufReader::new(f);
-        sources_content.push(f.lines().filter_map(|line| line.ok()).collect());
-    }
 
-    DebugLocInfo {
-        sources,
-        locations,
-        sources_content,
-    }
+    DebugLocInfo { sources, locations }
 }

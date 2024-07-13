@@ -3,24 +3,29 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use wasmparser::{Data, DataKind, Operator, Parser, Payload::*};
+use wasmparser::{
+    BinaryReader, Data, DataKind, KnownCustom, Operator, Parser, Payload::*, WasmFeatures,
+};
 
-fn is_reloc_debug_section_name(name: &str) -> bool {
+fn is_reloc_debug_section(name: &str) -> bool {
     return name.starts_with("reloc..debug_");
 }
 
-fn is_debug_section_name(name: &str) -> bool {
+fn is_debug_section(name: &str) -> bool {
     return name.starts_with(".debug_");
 }
 
-fn is_linking_section_name(name: &str) -> bool {
+fn is_linking_section(name: &str) -> bool {
     return name == "linking";
 }
 
-fn is_source_mapping_section_name(name: &str) -> bool {
-    return name == "sourceMappingURL";
-}
+// fn is_source_mapping_section(name: &str) -> bool {
+//     return name == "sourceMappingURL";
+// }
 
+fn is_name_section(name: &str) -> bool {
+    return name == "name";
+}
 pub struct DebugSections<'a> {
     pub tables: HashMap<&'a str, Vec<u8>>,
     // pub tables_index: HashMap<usize, Vec<u8>>,
@@ -30,7 +35,12 @@ pub struct DebugSections<'a> {
     pub func_offsets: Vec<usize>,
     pub data_segment_offsets: Vec<u32>,
 }
+fn parse_function_names(section: KnownCustom) -> HashMap<u32, String> {
+    let mut func_names = HashMap::new();
+    let reader = BinaryReader::new(data, 0, WasmFeatures::all());
 
+    func_names
+}
 impl<'a> DebugSections<'a> {
     pub fn read_sections(wasm: &'a [u8]) -> DebugSections<'a> {
         let parser = Parser::new(0);
@@ -48,13 +58,14 @@ impl<'a> DebugSections<'a> {
                 CustomSection(reader) => {
                     let name = reader.name();
                     let data = reader.data();
-                    if is_debug_section_name(&name) {
+                    if is_debug_section(&name) {
                         tables.insert(name, data.to_vec());
-                    } else if is_reloc_debug_section_name(&name) {
+                    } else if is_reloc_debug_section(&name) {
                         reloc_tables.insert(name, data.to_vec());
-                    } else if is_linking_section_name(&name) {
+                    } else if is_linking_section(&name) {
                         linking = Some(data.to_vec());
-                    } else if is_source_mapping_section_name(&name) {
+                    } else if is_name_section(name) {
+                        let names = parse_function_names(reader.as_known());
                     }
                 }
                 CodeSectionStart { count, range, size } => {
