@@ -1,68 +1,25 @@
-use std::fmt::Error;
-use std::fs::File;
+use std::fs::{canonicalize, File};
 use std::io::prelude::*;
 use std::{env, io::BufReader};
 
 use dwarf::get_debug_loc;
 use getopts::Options;
-use map_source::{map_source, SourceMapEntry};
+use map_source::map_source;
 use reloc::reloc;
 use std::path::Path;
-use wasm_read::{add_source_mapping_url_section, DebugSections};
+use wasm_read::BinaryInfo;
 
 extern crate getopts;
 extern crate gimli;
 extern crate rustc_serialize;
-extern crate vlq;
+extern crate serde;
+extern crate serde_json;
+// extern crate vlq;
 extern crate wasmparser;
-
 mod dwarf;
 mod map_source;
 mod reloc;
 mod wasm_read;
-
-struct PrefixReplacements {
-    replacements: Vec<(String, String)>,
-}
-
-impl PrefixReplacements {
-    fn parse(input: &Vec<String>) -> PrefixReplacements {
-        let mut replacements = Vec::new();
-        for i in input.iter() {
-            let separator = i.find('=');
-            if let Some(separator_index) = separator {
-                replacements.push((
-                    i.chars().take(separator_index).collect(),
-                    i.chars()
-                        .skip(separator_index + 1)
-                        .take(i.len() - 1 - separator_index)
-                        .collect(),
-                ));
-            } else {
-                replacements.push((i.clone(), String::new()))
-            }
-        }
-        return PrefixReplacements { replacements };
-    }
-
-    fn replace(&self, path: &String) -> String {
-        let mut result = path.clone();
-        for (ref old_prefix, ref new_prefix) in self.replacements.iter() {
-            if path.starts_with(old_prefix) {
-                result = result.split_off(old_prefix.len());
-                result.insert_str(0, new_prefix);
-                return result;
-            }
-        }
-        result
-    }
-
-    fn replace_all(&self, paths: &mut Vec<String>) {
-        for path in paths.iter_mut() {
-            *path = self.replace(&path);
-        }
-    }
-}
 
 fn main() {
     let mut opts = Options::new();
@@ -102,15 +59,15 @@ fn main() {
     let mut data = Vec::new();
     f.read_to_end(&mut data).expect("unable to read file");
 
-    let mut debug_sections = DebugSections::read_sections(data.as_slice());
+    let mut binary_info = BinaryInfo::read_sections(data.as_slice());
 
     if perform_reloc {
-        if debug_sections.linking.is_none() {
+        if binary_info.linking.is_none() {
             panic!("relocation information was not found");
         }
-        reloc(&mut debug_sections);
+        reloc(&mut binary_info);
     }
-    let mut di = get_debug_loc(&debug_sections);
+    let mut di = get_debug_loc(&binary_info);
     // for debug_info in di.locations.iter() {
     //     println!(
     //         "{} {} {} {}",
@@ -125,9 +82,12 @@ fn main() {
         let mut source = Err(format!("source file {} not found", file));
         for source_root in source_roots.iter() {
             let path = Path::new(source_root).join(file);
-            if path.as_path().exists() {
-                source = Ok(path.to_str().unwrap().to_owned());
-                break;
+            match canonicalize(path) {
+                Ok(absolute_path) => {
+                    source = Ok(absolute_path.to_str().unwrap().to_owned());
+                    break;
+                }
+                Err(e) => {}
             }
         }
         di.sources.push(source.expect(""));
@@ -146,29 +106,35 @@ fn main() {
         sources_content.push(f.lines().filter_map(|line| line.ok()).collect());
     }
 
-    let source_map = map_source(data.as_slice(), &di, &sources_content);
+    let result = map_source(data.as_slice(), &binary_info, &di, &sources_content);
 
     let output = args.opt_str("o").unwrap();
-    let mut result = String::new();
-    for (id, path) in di.sources.iter().enumerate() {
-        result += &format!("source {} {}\n", id, path);
-    }
-    for entry in source_map.iter() {
-        let SourceMapEntry {
-            address,
-            op,
-            source_file,
-            line,
-            source_code,
-        } = entry;
+    // let mut result = String::new();
+    // for (id, path) in di.sources.iter().enumerate() {
+    //     result += &format!("source {} {}\n", id, path);
+    // }
+    // for entry in source_map.iter() {
+    //     let SourceMapEntry {
+    //         address,
+    //         op,
+    //         source_file,
+    //         line,
+    //         source_code,
+    //     } = entry;
 
-        result += &format!(
-            "{}@{}\t{}\t({}:{})\n",
-            op, address, source_code, source_file, line
-        )
-    }
+    //     result += &format!(
+    //         "{}@{}\t{}\t({}:{})\n",
+    //         op, address, source_code, source_file, line
+    //     )
+    // }
     let mut f_out = File::create(output).expect("file cannot be created");
-    f_out.write(result.as_bytes()).expect("data written");
+    f_out
+        .write(
+            serde_json::to_string(&result)
+                .expect("Encoding error")
+                .as_bytes(),
+        )
+        .expect("Writing file error");
 }
 
 fn print_usage(program: &str, opts: Options) {

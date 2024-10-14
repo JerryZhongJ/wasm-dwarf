@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use wasmparser::{
-    BinaryReader, Data, DataKind, KnownCustom, Operator, Parser, Payload::*, WasmFeatures,
+    Data, DataKind, Import, KnownCustom, Name, Operator, Parser, Payload::*, TypeRef,
 };
 
 fn is_reloc_debug_section(name: &str) -> bool {
@@ -15,18 +15,7 @@ fn is_debug_section(name: &str) -> bool {
     return name.starts_with(".debug_");
 }
 
-fn is_linking_section(name: &str) -> bool {
-    return name == "linking";
-}
-
-// fn is_source_mapping_section(name: &str) -> bool {
-//     return name == "sourceMappingURL";
-// }
-
-fn is_name_section(name: &str) -> bool {
-    return name == "name";
-}
-pub struct DebugSections<'a> {
+pub struct BinaryInfo<'a> {
     pub tables: HashMap<&'a str, Vec<u8>>,
     // pub tables_index: HashMap<usize, Vec<u8>>,
     pub reloc_tables: HashMap<&'a str, Vec<u8>>,
@@ -34,15 +23,12 @@ pub struct DebugSections<'a> {
     pub code_start: usize,
     pub func_offsets: Vec<usize>,
     pub data_segment_offsets: Vec<u32>,
+    pub function_names: HashMap<usize, &'a str>,
+    pub import_func_num: usize,
 }
-fn parse_function_names(section: KnownCustom) -> HashMap<u32, String> {
-    let mut func_names = HashMap::new();
-    let reader = BinaryReader::new(data, 0, WasmFeatures::all());
 
-    func_names
-}
-impl<'a> DebugSections<'a> {
-    pub fn read_sections(wasm: &'a [u8]) -> DebugSections<'a> {
+impl<'a> BinaryInfo<'a> {
+    pub fn read_sections(wasm: &'a [u8]) -> BinaryInfo<'a> {
         let parser = Parser::new(0);
         let mut linking: Option<Vec<u8>> = None;
         let mut tables = HashMap::new();
@@ -51,6 +37,8 @@ impl<'a> DebugSections<'a> {
         let mut code_start: usize = 0;
         let mut func_offsets = Vec::new();
         let mut data_segment_offsets = Vec::new();
+        let mut function_names = HashMap::new();
+        let mut import_func_num = 0;
         // let mut section_index = 0;
         for payload in parser.parse_all(wasm) {
             let payload = payload.unwrap();
@@ -58,14 +46,36 @@ impl<'a> DebugSections<'a> {
                 CustomSection(reader) => {
                     let name = reader.name();
                     let data = reader.data();
-                    if is_debug_section(&name) {
-                        tables.insert(name, data.to_vec());
-                    } else if is_reloc_debug_section(&name) {
-                        reloc_tables.insert(name, data.to_vec());
-                    } else if is_linking_section(&name) {
-                        linking = Some(data.to_vec());
-                    } else if is_name_section(name) {
-                        let names = parse_function_names(reader.as_known());
+                    match reader.as_known() {
+                        KnownCustom::Name(subsections) => {
+                            for section in subsections {
+                                let section = section.unwrap();
+                                match section {
+                                    Name::Function(name_map) => {
+                                        for naming in name_map.into_iter() {
+                                            let naming = naming.unwrap();
+                                            function_names
+                                                .insert(naming.index as usize, naming.name);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        KnownCustom::Linking(_) => {
+                            linking = Some(data.to_vec());
+                        }
+                        KnownCustom::Reloc(_) => {
+                            if is_reloc_debug_section(&name) {
+                                reloc_tables.insert(name, data.to_vec());
+                            }
+                        }
+                        KnownCustom::Unknown => {
+                            if is_debug_section(&name) {
+                                tables.insert(name, data.to_vec());
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 CodeSectionStart { count, range, size } => {
@@ -76,7 +86,18 @@ impl<'a> DebugSections<'a> {
 
                     func_offsets.push(reader.original_position() - code_start);
                 }
-                ImportSection(reader) => func_offsets.push(0),
+                ImportSection(reader) => {
+                    for imp in reader.into_iter() {
+                        let Import { module, name, ty } = imp.unwrap();
+                        match ty {
+                            TypeRef::Func(_) => {
+                                func_offsets.push(0);
+                                import_func_num += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 DataSection(reader) => {
                     for data in reader.into_iter() {
                         let Data { kind, .. } = data.unwrap();
@@ -95,7 +116,7 @@ impl<'a> DebugSections<'a> {
             }
         }
 
-        DebugSections {
+        BinaryInfo {
             tables,
             // tables_index,
             reloc_tables,
@@ -103,6 +124,8 @@ impl<'a> DebugSections<'a> {
             code_start,
             func_offsets,
             data_segment_offsets,
+            function_names,
+            import_func_num,
         }
     }
 }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use wasmparser::{BinaryReader, WasmFeatures};
 
-use wasm_read::DebugSections;
+use wasm_read::BinaryInfo;
 
 fn to_vec(b: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
@@ -16,7 +16,7 @@ enum SymbolKind {
     Data(u32, u32),
 }
 
-pub fn reloc(debug_sections: &mut DebugSections) {
+pub fn reloc(debug_sections: &mut BinaryInfo) {
     let (func_indices, symbols) = {
         let ref linking_table = debug_sections.linking.as_ref().unwrap();
         let mut reader = BinaryReader::new(&linking_table, 0, WasmFeatures::all());

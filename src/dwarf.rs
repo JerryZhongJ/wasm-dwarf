@@ -1,8 +1,5 @@
 // Parses DWARF information.
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::{self, BufReader};
 
 use gimli;
 
@@ -12,7 +9,7 @@ trait Reader: gimli::Reader<Offset = usize> {}
 
 impl<'input, Endian> Reader for gimli::EndianBuf<'input, Endian> where Endian: gimli::Endianity {}
 
-use wasm_read::DebugSections;
+use wasm_read::BinaryInfo;
 
 fn to_vec(b: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
@@ -32,7 +29,7 @@ pub struct DebugLocInfo {
     pub locations: Vec<DebugLoc>,
 }
 
-pub fn get_debug_loc(debug_sections: &DebugSections) -> DebugLocInfo {
+pub fn get_debug_loc(debug_sections: &BinaryInfo) -> DebugLocInfo {
     let mut sources = Vec::new();
     let mut locations = Vec::new();
     let mut source_to_id_map: HashMap<u64, usize> = HashMap::new();
